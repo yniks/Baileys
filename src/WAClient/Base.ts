@@ -1,21 +1,12 @@
 import WAConnection from '../WAConnection/WAConnection'
 import { MessageStatusUpdate, PresenceUpdate, Presence, WABroadcastListInfo, WAProfilePictureChange } from './Constants'
-import {
-    WAMessage,
-    WANode,
-    WAMetric,
-    WAFlag,
-    MessageLogLevel,
-    WATag,
-} from '../WAConnection/Constants'
+import { WAMessage, WANode, WAMetric, WAFlag, MessageLogLevel, WATag } from '../WAConnection/Constants'
 import { generateProfilePicture } from '../WAClient/Utils'
 
-
 export default class WhatsAppWebBase extends WAConnection {
-
     /** Set the callback for message status updates (when a message is delivered, read etc.) */
     setOnMessageStatusChange(callback: (update: MessageStatusUpdate) => void) {
-        const func = json => {
+        const func = (json) => {
             json = json[1]
             let ids = json.id
             if (json.cmd === 'ack') {
@@ -27,7 +18,7 @@ export default class WhatsAppWebBase extends WAConnection {
                 participant: json.participant,
                 timestamp: new Date(json.t * 1000),
                 ids: ids,
-                type: (+json.ack)+1,
+                type: +json.ack + 1,
             }
             callback(data)
         }
@@ -51,7 +42,7 @@ export default class WhatsAppWebBase extends WAConnection {
     }
     /** Set the callback for presence updates; if someone goes offline/online, this callback will be fired */
     setOnPresenceUpdate(callback: (p: PresenceUpdate) => void) {
-        this.registerCallback('Presence', json => callback(json[1]))
+        this.registerCallback('Presence', (json) => callback(json[1]))
     }
     /** Query whether a given number is registered on WhatsApp */
     isOnWhatsApp = (jid: string) => this.query(['query', 'exist', jid]).then((m) => m.status === 200)
@@ -71,17 +62,11 @@ export default class WhatsAppWebBase extends WAConnection {
     /** Request an update on the presence of a user */
     requestPresenceUpdate = async (jid: string) => this.queryExpecting200(['action', 'presence', 'subscribe', jid])
     /** Query the status of the person (see groupMetadata() for groups) */
-    async getStatus (jid?: string) {
+    async getStatus(jid?: string) {
         return this.query(['query', 'Status', jid || this.userMetaData.id]) as Promise<{ status: string }>
     }
-    async setStatus (status: string) {
-        return this.setQuery ([
-            [
-                'status',
-                null,
-                Buffer.from (status, 'utf-8')
-            ]
-        ]) 
+    async setStatus(status: string) {
+        return this.setQuery([['status', null, Buffer.from(status, 'utf-8')]])
     }
     /** Get the URL to download the profile picture of a person/group */
     async getProfilePicture(jid: string | null) {
@@ -97,15 +82,16 @@ export default class WhatsAppWebBase extends WAConnection {
     /** Get the stories of your contacts */
     async getStories() {
         const json = ['query', { epoch: this.msgCount.toString(), type: 'status' }, null]
-        const response = await this.queryExpecting200(json, [30, WAFlag.ignore]) as WANode
+        const response = (await this.queryExpecting200(json, [30, WAFlag.ignore])) as WANode
         if (Array.isArray(response[2])) {
-            return response[2].map (row => (
-                { 
-                    unread: row[1]?.unread, 
-                    count: row[1]?.count, 
-                    messages: Array.isArray(row[2]) ? row[2].map (m => m[2]) : []
-                } as {unread: number, count: number, messages: WAMessage[]}
-            ))
+            return response[2].map(
+                (row) =>
+                    ({
+                        unread: row[1]?.unread,
+                        count: row[1]?.count,
+                        messages: Array.isArray(row[2]) ? row[2].map((m) => m[2]) : [],
+                    } as { unread: number; count: number; messages: WAMessage[] }),
+            )
         }
         return []
     }
@@ -115,10 +101,14 @@ export default class WhatsAppWebBase extends WAConnection {
         return this.query(json, [5, WAFlag.ignore]) // this has to be an encrypted query
     }
     /** Query broadcast list info */
-    async getBroadcastListInfo(jid: string) { return this.queryExpecting200(['query', 'contact', jid]) as Promise<WABroadcastListInfo> }
+    async getBroadcastListInfo(jid: string) {
+        return this.queryExpecting200(['query', 'contact', jid]) as Promise<WABroadcastListInfo>
+    }
     /** Delete the chat of a given ID */
-    async deleteChat (jid: string) {
-        return this.setQuery ([ ['chat', {type: 'delete', jid: jid}, null] ], [12, WAFlag.ignore]) as Promise<{status: number}>
+    async deleteChat(jid: string) {
+        return this.setQuery([['chat', { type: 'delete', jid: jid }, null]], [12, WAFlag.ignore]) as Promise<{
+            status: number
+        }>
     }
     /**
      * Check if your phone is connected
@@ -197,23 +187,47 @@ export default class WhatsAppWebBase extends WAConnection {
         }
         return loadMessage() as Promise<void>
     }
-    async updateProfilePicture (jid: string, img: Buffer) {
-        const data = await generateProfilePicture (img)
-        const tag = this.generateMessageTag ()
+    async *loadEntireConversationStream(jid: string, chunkSize = 25, mostRecentFirst = true) {
+        let offsetID = null
+        let self = this
+        while (true) {
+            const json = await self.loadConversation(jid, chunkSize, offsetID, mostRecentFirst)
+            let lastMessage
+            if (mostRecentFirst) {
+                for (let i = json.length - 1; i >= 0; i--) {
+                    yield json[i]
+                    lastMessage = json[i]
+                }
+            } else {
+                for (let i = 0; i < json.length; i++) {
+                    yield json[i]
+                    lastMessage = json[i]
+                }
+            }
+            // if there are still more messages
+            if (json.length >= chunkSize) {
+                offsetID = lastMessage.key // get the last message
+                await new Promise((resolve, reject) => setTimeout(resolve, 200)) // send query after 200 ms
+            } else return
+        }
+    }
+    async updateProfilePicture(jid: string, img: Buffer) {
+        const data = await generateProfilePicture(img)
+        const tag = this.generateMessageTag()
         const query: WANode = [
-            'picture', 
-            { jid: jid, id: tag, type: 'set' }, 
+            'picture',
+            { jid: jid, id: tag, type: 'set' },
             [
                 ['image', null, data.img],
-                ['preview', null, data.preview]
-            ]
+                ['preview', null, data.preview],
+            ],
         ]
-        return this.setQuery ([query], [WAMetric.picture, 136], tag) as Promise<WAProfilePictureChange>
+        return this.setQuery([query], [WAMetric.picture, 136], tag) as Promise<WAProfilePictureChange>
     }
     /** Generic function for action, set queries */
-    async setQuery (nodes: WANode[], binaryTags: WATag = [WAMetric.group, WAFlag.ignore], tag?: string) {
-        const json = ['action', {epoch: this.msgCount.toString(), type: 'set'}, nodes]
-        const result = await this.queryExpecting200(json, binaryTags, null, tag) as Promise<{status: number}>
+    async setQuery(nodes: WANode[], binaryTags: WATag = [WAMetric.group, WAFlag.ignore], tag?: string) {
+        const json = ['action', { epoch: this.msgCount.toString(), type: 'set' }, nodes]
+        const result = (await this.queryExpecting200(json, binaryTags, null, tag)) as Promise<{ status: number }>
         return result
     }
 }
